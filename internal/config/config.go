@@ -38,6 +38,7 @@ type Config struct {
 	// Experiments is the [[experiments]] list — productized profile
 	// A/B runs (usability arc P6.4). See experiments.go.
 	Experiments []ExperimentConfig `toml:"experiments"`
+	EmailReport EmailReportConfig  `toml:"email_report"`
 }
 
 // ObservabilityConfig is the [observability] surface — the generalized
@@ -1419,6 +1420,22 @@ type ModelPricing struct {
 	FastMultiplier float64 `toml:"fast_multiplier"`
 }
 
+type EmailReportConfig struct {
+	Enabled    bool            `toml:"enabled"`
+	Schedule   string          `toml:"schedule"`
+	Recipients []string        `toml:"recipients"`
+	Sections   []string        `toml:"sections"`
+	SMTP       EmailSMTPConfig `toml:"smtp"`
+}
+
+type EmailSMTPConfig struct {
+	Host     string `toml:"host"`
+	Port     int    `toml:"port"`
+	Username string `toml:"username"`
+	Password string `toml:"password"`
+	From     string `toml:"from"`
+}
+
 // Default returns the baked-in defaults (spec §16.1).
 func Default() Config {
 	return Config{
@@ -1789,6 +1806,14 @@ func Default() Config {
 				// IntelligenceMCPConfig.Features for V7-16 precedence.
 				Features: []string{},
 				Audit:    IntelligenceMCPAuditConfig{Enabled: true},
+			},
+		},
+		EmailReport: EmailReportConfig{
+			Enabled:  false,
+			Schedule: "0 9 * * MON",
+			Sections: []string{"cost", "sessions", "top_sessions"},
+			SMTP: EmailSMTPConfig{
+				Port: 587,
 			},
 		},
 	}

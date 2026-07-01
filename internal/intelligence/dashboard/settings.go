@@ -52,7 +52,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"pricing", "observer", "watcher", "freshness", "retention",
 			"hooks", "proxy", "compression", "intelligence",
 			"advisor", "cachetrack", "observability", "secrets", "profiles", "mcp",
-			"org", "otel", "guard", "routing",
+			"org", "otel", "guard", "routing", "email_report",
 		},
 	})
 }
@@ -578,6 +578,12 @@ func applySectionUpdate(cfg *config.Config, name string, body []byte, configPath
 			next.Rules = rules
 		}
 		cfg.Routing = next
+	case "email_report":
+		var sec config.EmailReportConfig
+		if err := json.Unmarshal(body, &sec); err != nil {
+			return fmt.Errorf("decode email_report: %w", err)
+		}
+		cfg.EmailReport = sec
 	case "pricing":
 		return errors.New("pricing has its own endpoint /api/config/pricing")
 	default:

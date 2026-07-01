@@ -26,6 +26,7 @@ import (
 	"github.com/marmutapp/superbased-observer/internal/intelligence/dashboard"
 	"github.com/marmutapp/superbased-observer/internal/orgclient"
 	"github.com/marmutapp/superbased-observer/internal/platform/crossmount"
+	"github.com/marmutapp/superbased-observer/internal/report"
 	"github.com/marmutapp/superbased-observer/internal/store"
 )
 
@@ -215,7 +216,6 @@ func newStartCmd() *cobra.Command {
 					RecognizesSessionFile: recognizesSessionFile(),
 					ToolCatalog:           toolCatalog(),
 					ProxyPort:             cfg.Proxy.Port,
-					StashDir:              cfg.Compression.Conversation.Stash.Dir,
 					GuardEnabled:          cfg.Guard.Enabled,
 					GuardMode:             cfg.Guard.Mode,
 					GuardStrict:           cfg.Guard.Strict,
@@ -564,6 +564,21 @@ func newStartCmd() *cobra.Command {
 			// WARN and never cancels the proxy/watcher/dashboard.
 			g.Go(func() error {
 				return runProcessObserver(gctx, configPath)
+			})
+			// Weekly email report scheduler — opt-in, fail-soft (P1).
+			// Gated on [email_report] enabled = true; a missing SMTP config
+			// or send failure logs and never cancels siblings.
+			g.Go(func() error {
+				rcfg, rdb, rcleanup, rerr := loadConfigAndDB(gctx, configPath)
+				if rerr != nil {
+					return nil
+				}
+				defer rcleanup()
+				rlogger := newLogger(rcfg.Observer.LogLevel)
+				resolvedPath, _ := config.ResolveGlobalPath(configPath)
+				report.StartScheduler(rdb, resolvedPath, rlogger)
+				<-gctx.Done()
+				return nil
 			})
 			if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 				return err

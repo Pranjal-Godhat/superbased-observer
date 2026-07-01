@@ -956,66 +956,6 @@ export type PredictResponse = {
   limit: PredictLimitGauge;
 };
 
-// Output Composition (Verbosity) — GET /api/session/<id>/verbosity.
-export type VerbosityLangBytes = {
-  language: string;
-  bytes: number;
-  category: string;
-};
-
-export type VerbosityResponse = {
-  session_id: string;
-  total_bytes: number;
-  code_bytes: number;
-  explain_bytes: number;
-  code_pct: number;
-  explain_pct: number;
-  code_explain_ratio?: number;
-  by_category: Record<string, number>;
-  channels: {
-    narrative_bytes: number;
-    artifact_bytes: number;
-    artifact_untagged_bytes: number;
-    written_bytes: number;
-    command_bytes: number;
-  };
-  code_by_language: VerbosityLangBytes[];
-  unknown_ext?: VerbosityLangBytes[];
-  authored_captured: boolean;
-  // Estimated token/$ attribution (plan §7) — labelled "est." on the card.
-  // cost_estimated is false (and the $ figures absent) when there is no
-  // priced model or no token rows for the session.
-  cost_estimated: boolean;
-  model?: string;
-  est_output_tokens?: number;
-  est_reasoning_tokens?: number;
-  est_code_tokens?: number;
-  est_explain_tokens?: number;
-  est_code_usd?: number;
-  est_explain_usd?: number;
-  est_total_usd?: number;
-};
-
-// Output Composition cross-session rollup — GET /api/verbosity/aggregate.
-export type VerbosityAggregateGroup = {
-  key: string;
-  code_bytes: number;
-  explain_bytes: number;
-  total_bytes: number;
-  code_pct: number;
-  explain_pct: number;
-  code_explain_ratio?: number;
-  top_languages: VerbosityLangBytes[];
-  est_total_usd?: number;
-  cost_estimated: boolean;
-};
-
-export type VerbosityAggregateResponse = {
-  by: string;
-  since_days: number;
-  groups: VerbosityAggregateGroup[];
-};
-
 // ---------- /api/cache/overview (C14) ----------
 
 export type CacheOverviewGlobal = {
@@ -1527,14 +1467,6 @@ export type CompressionTimeseries = {
 export type ShaCount = { sha: string; count: number };
 export type ActionIdCount = { action_id: number; count: number };
 
-export type StashedSample = {
-  sha: string;
-  snippet: string;
-  bytes: number;
-  count: number;
-  retrieved_count: number;
-};
-
 export type CompressionRetrieval = {
   days: number;
   stash_retrievals: number;
@@ -1543,7 +1475,6 @@ export type CompressionRetrieval = {
   retrieve_rate: number;
   top_retrieved_shas: ShaCount[];
   top_searched_actions: ActionIdCount[];
-  stashed_samples: StashedSample[];
   hints: unknown[];
 };
 
@@ -1632,6 +1563,22 @@ export type SetupCodex = {
   would_register_error?: string;
 };
 
+export type EmailSMTPConfig = {
+  Host: string;
+  Port: number;
+  Username: string;
+  Password: string;
+  From: string;
+};
+
+export type EmailReportConfig = {
+  Enabled: boolean;
+  Schedule: string;
+  Recipients: string[];
+  Sections: string[];
+  SMTP: EmailSMTPConfig;
+};
+
 // ---------- /api/tools/breakdown ----------
 
 export type ToolBreakdown = {
@@ -1680,6 +1627,7 @@ export type ConfigShape = {
   Intelligence: IntelligenceConfig;
   Proxy: Record<string, unknown>;
   Compression: Record<string, unknown>;
+  EmailReport: EmailReportConfig;
   [key: string]: unknown;
 };
 
