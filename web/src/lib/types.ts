@@ -1563,6 +1563,22 @@ export type SetupCodex = {
   would_register_error?: string;
 };
 
+export type EmailSMTPConfig = {
+  Host: string;
+  Port: number;
+  Username: string;
+  Password: string;
+  From: string;
+};
+
+export type EmailReportConfig = {
+  Enabled: boolean;
+  Schedule: string;
+  Recipients: string[];
+  Sections: string[];
+  SMTP: EmailSMTPConfig;
+};
+
 // ---------- /api/tools/breakdown ----------
 
 export type ToolBreakdown = {
@@ -1611,6 +1627,7 @@ export type ConfigShape = {
   Intelligence: IntelligenceConfig;
   Proxy: Record<string, unknown>;
   Compression: Record<string, unknown>;
+  EmailReport: EmailReportConfig;
   [key: string]: unknown;
 };
 

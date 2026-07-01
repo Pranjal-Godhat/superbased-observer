@@ -11,6 +11,7 @@ import { EnrolmentSection } from "./settings/EnrolmentSection";
 import { HealthSection } from "./settings/HealthSection";
 import { StorageSection } from "./settings/StorageSection";
 import { ChartState } from "@/components/ChartState";
+import { MailIcon } from "@/components/icons";
 import {
   BoltIcon,
   CalendarIcon,
@@ -80,7 +81,8 @@ type SectionId =
   | "guard"
   | "routing"
   | "process"
-  | "antigravity";
+  | "antigravity"
+  | "email_report";
 
 type SectionDef = {
   id: SectionId;
@@ -466,6 +468,18 @@ const SECTIONS: SectionDef[] = [
       behavior: "Restart required — the backend binds at daemon startup.",
     },
   },
+  {
+    id: "email_report",
+    label: "Email report",
+    group: "edit",
+    status: "restart",
+    icon: <MailIcon size={13} />,
+    about: {
+      summary: "Weekly email report — sends a cost and activity summary to your inbox every Monday morning.",
+      whenModified: "Setting up or changing your email recipients or SMTP credentials.",
+      behavior: "Restart required — the scheduler starts with the daemon.",
+    },
+  },
 ];
 
 const STATUS_LABEL: Record<SectionDef["status"], string> = {
@@ -603,13 +617,22 @@ export function SettingsPage() {
               onReload={config.reload}
             />
           )}
+          {active === "email_report" && (
+            <EmailReportSection
+              config={config.data}
+              loading={config.loading}
+              error={config.error}
+              onReload={config.reload}
+            />
+          )}
           {active !== "pricing" &&
             active !== "backfill" &&
             active !== "tools" &&
             active !== "health" &&
             active !== "storage" &&
             active !== "enrolment" &&
-            active !== "intelligence" && (
+            active !== "intelligence" &&
+            active !== "email_report" && (
               <SectionView
                 section={active}
                 config={config.data}
@@ -2750,4 +2773,318 @@ function countKeys(v: unknown): number {
   if (v == null || typeof v !== "object") return 0;
   if (Array.isArray(v)) return v.length;
   return Object.keys(v as Record<string, unknown>).length;
+}
+
+function EmailReportSection({
+  config,
+  loading,
+  error,
+  onReload,
+}: {
+  config: ConfigResponse | null;
+  loading: boolean;
+  error: Error | null;
+  onReload: () => void;
+}) {
+  const cfg = config?.config?.EmailReport;
+  const [enabled, setEnabled] = useState(false);
+  const [frequency, setFrequency] = useState<"weekly" | "monthly">("weekly");
+  const [dayOfWeek, setDayOfWeek] = useState("MON");
+  const [dayOfMonth, setDayOfMonth] = useState(1);
+  const [hour, setHour] = useState(9);
+  const [minute, setMinute] = useState(0);
+  const [recipients, setRecipients] = useState("");
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpUser, setSmtpUser] = useState("");
+  const [smtpPass, setSmtpPass] = useState("");
+  const [smtpFrom, setSmtpFrom] = useState("");
+  const [sections, setSections] = useState<string[]>(["cost", "sessions", "top_sessions"]);
+  const [save, setSave] = useState<{
+    state: "idle" | "saving" | "ok" | "err";
+    message?: string;
+  }>({ state: "idle" });
+
+  function buildCron(freq: "weekly" | "monthly", dow: string, dom: number, h: number, m: number): string {
+  if (freq === "weekly") {
+    return `${m} ${h} * * ${dow}`;
+  }
+  return `${m} ${h} ${dom} * *`;
+}
+
+  function parseCron(cron: string): { frequency: "weekly" | "monthly"; dayOfWeek: string; dayOfMonth: number; hour: number; minute: number } {
+    const parts = cron.trim().split(/\s+/);
+    const result = { frequency: "weekly" as "weekly" | "monthly", dayOfWeek: "MON", dayOfMonth: 1, hour: 9, minute: 0 };
+    if (parts.length !== 5) return result;
+    const [min, hr, dom, , dow] = parts;
+    result.minute = Number(min) || 0;
+    result.hour = Number(hr) || 9;
+    if (dom !== "*") {
+      result.frequency = "monthly";
+      result.dayOfMonth = Number(dom) || 1;
+    } else {
+      result.frequency = "weekly";
+      result.dayOfWeek = dow.toUpperCase();
+    }
+    return result;
+  }
+  
+  const REPORT_SECTIONS: { id: string; label: string; desc: string }[] = [
+    { id: "cost", label: "Cost summary", desc: "Total cost, turns, input/output tokens" },
+    { id: "sessions", label: "Session stats", desc: "Session count, quality score, error rate" },
+    { id: "cache", label: "Cache & savings", desc: "Cache read/write tokens" },
+    { id: "performance", label: "Performance", desc: "Response time, time to first token" },
+    { id: "top_sessions", label: "Top sessions by cost", desc: "Your 5 most expensive sessions" },
+    { id: "by_model", label: "Cost by model", desc: "Breakdown per Claude/GPT model" },
+  ];
+
+  function toggleSection(sections: string[], id: string): string[] {
+    return sections.includes(id) ? sections.filter((s) => s !== id) : [...sections, id];
+  }
+    useEffect(() => {
+      if (!cfg) return;
+      setEnabled(cfg.Enabled ?? false);
+      const parsed = parseCron(cfg.Schedule ?? "0 9 * * MON");
+      setFrequency(parsed.frequency);
+      setDayOfWeek(parsed.dayOfWeek);
+      setDayOfMonth(parsed.dayOfMonth);
+      setHour(parsed.hour);
+      setMinute(parsed.minute);
+      setRecipients((cfg.Recipients ?? []).join(", "));
+      setSmtpHost(cfg.SMTP?.Host ?? "");
+      setSmtpPort(cfg.SMTP?.Port ?? 587);
+      setSmtpUser(cfg.SMTP?.Username ?? "");
+      setSmtpPass(cfg.SMTP?.Password ?? "");
+      setSmtpFrom(cfg.SMTP?.From ?? "");
+      setSections(cfg.Sections?.length ? cfg.Sections : ["cost", "sessions", "top_sessions"]);
+    }, [cfg]);
+
+  async function saveSection() {
+    setSave({ state: "saving" });
+    try {
+      const res = await fetchJSON<{ saved: boolean; restart_required: boolean }>(
+        "/api/config/section/email_report",
+        undefined,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            Enabled: enabled,
+            Schedule: buildCron(frequency, dayOfWeek, dayOfMonth, hour, minute),
+            Recipients: recipients.split(",").map((r) => r.trim()).filter(Boolean),
+            Sections: sections,
+            SMTP: {
+              Host: smtpHost,
+              Port: smtpPort,
+              Username: smtpUser,
+              Password: smtpPass,
+              From: smtpFrom,
+            },
+          }),
+        },
+      );
+      if (!res.saved) throw new Error("server did not confirm save");
+      if (res.restart_required) markRestartPending("email_report");
+      setSave({ state: "ok", message: "Saved · restart daemon to apply" });
+      onReload();
+    } catch (e) {
+      setSave({
+        state: "err",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  return (
+    <ChartShell
+      title="Email report"
+      sub="Send a weekly AI cost and activity summary to your inbox every Monday."
+      right={
+        <div className="flex items-center gap-2 text-[11px]">
+          {save.state === "ok" && (
+            <span className="text-success">{save.message}</span>
+          )}
+          {save.state === "err" && (
+            <Tooltip content={save.message} maxWidth={360}>
+              <span tabIndex={0} className="cursor-help text-danger focus:outline-none">
+                Save failed
+              </span>
+            </Tooltip>
+          )}
+          <button
+            type="button"
+            onClick={saveSection}
+            disabled={save.state === "saving" || loading || !config}
+            className="rounded-2 border border-accent/40 bg-accent-soft px-3 py-1 text-[11px] font-medium text-accent disabled:opacity-40"
+          >
+            {save.state === "saving" ? "Saving…" : "Save section"}
+          </button>
+        </div>
+      }
+    >
+      <ChartState
+        loading={loading && !config}
+        error={error}
+        empty={false}
+        height={200}
+      >
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Field label="Enable weekly report">
+            <label className="flex items-center gap-2 text-[12px] text-fg-1">
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+                className="h-3.5 w-3.5 accent-current"
+              />
+              {enabled ? "Enabled" : "Disabled"}
+            </label>
+          </Field>
+          <Field label="Frequency">
+            <select
+              value={frequency}
+              onChange={(e) => setFrequency(e.target.value as "weekly" | "monthly")}
+              className="h-8 w-full rounded-2 border border-line-2 bg-bg-2 px-2 text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+            >
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </Field>
+
+          {frequency === "weekly" ? (
+            <Field label="Day of week">
+              <select
+                value={dayOfWeek}
+                onChange={(e) => setDayOfWeek(e.target.value)}
+                className="h-8 w-full rounded-2 border border-line-2 bg-bg-2 px-2 text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+              >
+                <option value="MON">Monday</option>
+                <option value="TUE">Tuesday</option>
+                <option value="WED">Wednesday</option>
+                <option value="THU">Thursday</option>
+                <option value="FRI">Friday</option>
+                <option value="SAT">Saturday</option>
+                <option value="SUN">Sunday</option>
+              </select>
+            </Field>
+          ) : (
+            <Field label="Day of month" hint="1-28 (to avoid skipped months)">
+              <select
+                value={dayOfMonth}
+                onChange={(e) => setDayOfMonth(Number(e.target.value))}
+                className="h-8 w-full rounded-2 border border-line-2 bg-bg-2 px-2 text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+              >
+                {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            </Field>
+          )}
+
+          <Field label="Time">
+            <div className="flex items-center gap-2">
+              <select
+                value={hour}
+                onChange={(e) => setHour(Number(e.target.value))}
+                className="h-8 rounded-2 border border-line-2 bg-bg-2 px-2 text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+              >
+                {Array.from({ length: 24 }, (_, i) => i).map((h) => (
+                  <option key={h} value={h}>
+                    {h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`}
+                  </option>
+                ))}
+              </select>
+              <span className="text-fg-3">:</span>
+              <select
+                value={minute}
+                onChange={(e) => setMinute(Number(e.target.value))}
+                className="h-8 rounded-2 border border-line-2 bg-bg-2 px-2 text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+              >
+                {["00", "15", "30", "45"].map((m) => (
+                  <option key={m} value={Number(m)}>{m}</option>
+                ))}
+              </select>
+            </div>
+          </Field>
+          <Field label="Recipients" hint="Comma-separated email addresses">
+            <input
+              type="text"
+              value={recipients}
+              onChange={(e) => setRecipients(e.target.value)}
+              placeholder="you@gmail.com, boss@company.com"
+              className="h-8 w-full rounded-2 border border-line-2 bg-bg-2 px-2 font-mono text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+            />
+          </Field>
+          <Field label="From address">
+            <input
+              type="text"
+              value={smtpFrom}
+              onChange={(e) => setSmtpFrom(e.target.value)}
+              placeholder="observer@gmail.com"
+              className="h-8 w-full rounded-2 border border-line-2 bg-bg-2 px-2 font-mono text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+            />
+          </Field>
+          <Field label="SMTP host">
+            <input
+              type="text"
+              value={smtpHost}
+              onChange={(e) => setSmtpHost(e.target.value)}
+              placeholder="smtp.gmail.com"
+              className="h-8 w-full rounded-2 border border-line-2 bg-bg-2 px-2 font-mono text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+            />
+          </Field>
+          <Field label="SMTP port">
+            <input
+              type="number"
+              value={smtpPort}
+              onChange={(e) => setSmtpPort(Number(e.target.value))}
+              className="h-8 w-full rounded-2 border border-line-2 bg-bg-2 px-2 font-mono text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+            />
+          </Field>
+          <Field label="SMTP username">
+            <input
+              type="text"
+              value={smtpUser}
+              onChange={(e) => setSmtpUser(e.target.value)}
+              placeholder="you@gmail.com"
+              className="h-8 w-full rounded-2 border border-line-2 bg-bg-2 px-2 font-mono text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+            />
+          </Field>
+          <Field label="SMTP password" hint="For Gmail use an App Password, not your real password">
+            <input
+              type="password"
+              value={smtpPass}
+              onChange={(e) => setSmtpPass(e.target.value)}
+              placeholder="app-password"
+              className="h-8 w-full rounded-2 border border-line-2 bg-bg-2 px-2 font-mono text-[12px] text-fg-1 focus:border-accent focus:outline-none"
+            />
+          </Field>
+          <div className="md:col-span-2">
+            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-fg-3">
+              Report sections
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {REPORT_SECTIONS.map((s) => (
+                <label
+                  key={s.id}
+                  className="flex items-start gap-2 rounded-2 border border-line-2 bg-bg-2 px-3 py-2 text-[12px] text-fg-1 cursor-pointer hover:bg-bg-3"
+                >
+                  <input
+                    type="checkbox"
+                    checked={sections.includes(s.id)}
+                    onChange={() => setSections((prev) => toggleSection(prev, s.id))}
+                    className="mt-0.5 h-3.5 w-3.5 accent-current"
+                  />
+                  <div>
+                    <div className="font-medium">{s.label}</div>
+                    <div className="text-[10.5px] text-fg-3">{s.desc}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      </ChartState>
+    </ChartShell>
+  );
 }
